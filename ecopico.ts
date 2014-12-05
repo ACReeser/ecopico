@@ -4,7 +4,6 @@ interface Named {
 
 interface Individual extends Named{
 	getGenotype(): Genotype;
-	getRandomGene();
 	getFitness(): number;
 }
 
@@ -13,6 +12,14 @@ interface Resource extends Named{
 	harvest(a: Agent);
 	improve(a: Agent);
 	getImproveCost(): number;
+}
+
+class RuntimeFactory{
+	static create<T>(className: string, instanceParameters): T{
+		var newInstance = Object.create(window[className].prototype);
+		newInstance.constructor.apply(newInstance, instanceParameters);
+		return newInstance;
+	}
 }
 
 class World{
@@ -107,10 +114,9 @@ this.log.out(this.players[i].geneString());
 
 //exposes properties for expression (name, value) and inheritance (dominant, recessive)
 class Gene implements Named{
-	static geneNames: Array<string> = ["shy", "aggressive", "smart", "stingy"];
-	private dominant: boolean = true;
-	private activated: boolean = false;
-	public value: any;
+	static geneNames: Array<string> = ["shy", "aggression", "intelligence", "curiosity"];
+	public dominant: boolean = true;
+	public degree: number;
 	get isDominant(): boolean{
 		return this.dominant;
 	}
@@ -118,10 +124,37 @@ class Gene implements Named{
 		return !this.dominant;
 	}
 	constructor(public name: string, 
-				public payload: string){
-		var paySplit = payload.split(":");
-		this.dominant = paySplit[0] == "D";
-		this.value = paySplit[1] == "true";
+				       dominant: boolean,
+				public dominantExpression:any,
+				public recessiveExpression: any){
+		this.dominant = dominant;
+	}
+	static create(name: string): Gene{
+		return RuntimeFactory.create<Gene>(name, null);
+	}
+}
+class ShyGene extends Gene{
+	constructor(public name: string, 
+				       dominant: boolean){
+		super(name, dominant, false, true);
+	}
+}
+class AggressionGene extends Gene{
+	constructor(public name: string, 
+				       dominant: boolean){
+		super(name, dominant, true, false);
+	}
+}
+class CuriosityGene extends Gene{
+	constructor(public name: string, 
+				       dominant: boolean){
+		super(name, dominant, false, true);
+	}
+}
+class IntelligenceGene extends Gene{
+	constructor(public name: string, 
+				       dominant: boolean){
+		super(name, dominant, false, true);
 	}
 }
 //idea: a 'curiousity' gene that controls whether or not an individual interacts with the mutator resource
@@ -136,11 +169,10 @@ class Chromosome{
 		} else {
 			values = [];	
 		}
-		for(var i = 0; i < Gene.geneNames.length; i++){
-			if (values[i] == null)
-				values[i] = (Math.random() > .5 ? "D" : "d") + ":" + (Math.random() > .5);
-				
-			this.geneMap[Gene.geneNames[i]] = new Gene(Gene.geneNames[i], values[i]);
+		for(var i = 0; i < Gene.geneNames.length; i++){			
+			//todo: move this to gene.create
+			var typeName: string = Gene.geneNames[i].substr(0,1).toUpperCase()+Gene.geneNames[i].substring(1)+"Gene";	
+			this.geneMap[Gene.geneNames[i]] = Gene.create(typeName);
 		}
 	}
 	mutate(){
@@ -158,7 +190,7 @@ class Chromosome{
 class Genotype{
 	private chromosomeA: Chromosome;
 	private chromosomeB: Chromosome;
-	private expression: Object = {};
+	private phenotype: Object = {};
 	constructor(environmentalMutationRisk: number, parentA?: Individual, parentB?: Individual){
 		var chrA: string;
 		var chrB: string;
@@ -185,19 +217,24 @@ class Genotype{
 				this.chromosomeB.mutate();
 		}
 	}
-	expressedGene(name: string): Gene{
-		var lookupGene: Gene = this.expression[name];
-		if (lookupGene != null)
-			return lookupGene;
+	expressedPhenotype(geneName: string){		
+		var cachedPhenotype: any = this.phenotype[geneName];
+		if (cachedPhenotype != null)
+			return cachedPhenotype;
 		else {
-			lookupGene = this.chromosomeA.geneMap[name];
+			var gA: Gene = this.chromosomeA.geneMap[geneName];
 			//if it's dominant, it's expressed
-			if (lookupGene.isDominant){
-				this.expression[name] = lookupGene;
-				return lookupGene;
+			if (gA.isDominant){
+				this.phenotype[geneName] = gA.dominantExpression;
 			} else { 
-				return this.chromosomeB.geneMap[name];
+				var gB: Gene = this.chromosomeB.geneMap[geneName];
+				if (gB.isDominant){
+					this.phenotype[geneName] = gB.dominantExpression;
+				} else {
+					this.phenotype[geneName] = gB.recessiveExpression;
+				}
 			}
+			return this.phenotype[geneName];
 		}
 	}
 	getChromatin(): string{
@@ -278,18 +315,6 @@ class Agent implements Named, Individual{
 	getGenotype(){
 		return this.genotype;
 	}
-	getRandomGene(): any {
-		var r = Math.random();
-		if (r > .75){
-			return ['smart', this.smart];
-		} else if (r > .5){
-			return ['aggressive', this.aggressive];
-		} else if (r > .25) {
-			return ['shy', this.shy];
-		} else {
-			return ['stingy', this.stingy];
-		}		
-	}
 	getFitness():number{
 		return this.cycles;
 	}
@@ -298,17 +323,16 @@ class Agent implements Named, Individual{
 	}
 	geneString(): string{
 		return ("| "+this.genotype.status()+" |");
-
 	}
 	tick(world: World, log:Log): string{
-		if (this.shy && (Math.random() > .5)){
+		if (this.genotype.expressedPhenotype("shy") && (Math.random() > .5)){
 			log.out(this.displayName +" does not operate");
 		} else {
 			var r = world.closestResource();
 			log.out(this.displayName +" approaches a "+r.name);
 			
 			if (r.isHazard){
-				if (this.aggressive && this.cycles > r.getImproveCost()){
+				if (this.genotype.expressedPhenotype("aggression") && this.cycles > r.getImproveCost()){
 					r.improve(this);
 					log.out(this.displayName + " attacks the " + r.name);
 				} else {
@@ -316,7 +340,7 @@ class Agent implements Named, Individual{
 					log.out(this.displayName + " is hurt by the " + r.name);
 				}
 			} else if (r instanceof Cycles) {			
-				if (this.smart && this.cycles > r.getImproveCost()){
+				if (this.genotype.expressedPhenotype("intelligence") && this.cycles > r.getImproveCost()){
 					r.improve(this);
 					log.out(this.displayName + " improves the " + r.name);
 				} else {
@@ -325,7 +349,7 @@ class Agent implements Named, Individual{
 				}
 			} else {
 				var harvestNotStore = Math.random() > .5;
-				if (this.stingy || harvestNotStore){
+				if (this.genotype.expressedPhenotype("intelligence") || harvestNotStore){
 					r.harvest(this);
 					log.out(this.displayName + " harvests the " + r.name);
 				} else {
