@@ -114,7 +114,7 @@ this.log.out(this.players[i].geneString());
 
 //exposes properties for expression (name, value) and inheritance (dominant, recessive)
 class Gene implements Named{
-	static geneNames: Array<string> = ["shy", "aggression", "intelligence", "curiosity"];
+	static geneNames: string[] = ["shy", "aggression", "intelligence", "curiosity"];
 	public dominant: boolean = true;
 	public degree: number;
 	get isDominant(): boolean{
@@ -127,10 +127,11 @@ class Gene implements Named{
 				       dominant: boolean,
 				public dominantExpression:any,
 				public recessiveExpression: any){
+		console.log("dominant is "+dominant);
 		this.dominant = dominant;
 	}
 	static create(name: string): Gene{
-		return RuntimeFactory.create<Gene>(name, null);
+		return RuntimeFactory.create<Gene>(name, [name, (Math.random() > .5)]);
 	}
 }
 class ShyGene extends Gene{
@@ -171,6 +172,7 @@ class Chromosome{
 		}
 		for(var i = 0; i < Gene.geneNames.length; i++){			
 			//todo: move this to gene.create
+			//todo: actually reference inherited chromatin from the rawChromatin/values collection
 			var typeName: string = Gene.geneNames[i].substr(0,1).toUpperCase()+Gene.geneNames[i].substring(1)+"Gene";	
 			this.geneMap[Gene.geneNames[i]] = Gene.create(typeName);
 		}
@@ -275,10 +277,6 @@ class Genotype{
 
 class Agent implements Named, Individual{
 	cycles: number = 0;
-	shy: boolean = false;
-	aggressive: boolean = false;
-	smart: boolean = false;
-	stingy: boolean = false;
 	private genotype: Genotype;
 	public name: string;
 	get displayName(): string{
