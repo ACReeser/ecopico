@@ -1,0 +1,5 @@
+{
+  "glob": ["*.ts", "README.md"],
+  "github": false,
+  "repository-url": "https://github.com/ACReeser/ecopico"
+}
