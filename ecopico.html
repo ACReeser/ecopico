@@ -1,0 +1,456 @@
+<!DOCTYPE html><html lang="en"><head><title>ecopico</title></head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0"><meta name="citare-relative-root" content=""><meta name="citare-document-path" content="ecopico"><meta name="citare-project-path" content="ecopico.ts"><meta name="citare-github-url" content="https://github.com/ACReeser/ecopico"><link rel="stylesheet" type="text/css" media="all" href="assets/style.css"><script type="text/javascript" src="assets/behavior.js"></script><body><div id="bg"></div><div id="meta"><div class="file-path"><a href="https://github.com/ACReeser/ecopico/blob/master/ecopico.ts">ecopico.ts</a></div></div><div id="document" class="codedoc"><div class="segment nocomment"><div class="comments"></div><div class="code"><div class="wrapper"><span class="comment">/// &lt;reference path="Statistics.ts" /&gt;</span>
+
+<span class="class"><span class="keyword">interface</span> <span class="title">Named</span> {</span>
+	name: string;
+}
+
+<span class="class"><span class="keyword">interface</span> <span class="title">Individual</span> <span class="keyword">extends</span> <span class="title">Named</span> {</span>
+	getGenotype(): Genotype;
+	getFitness(): number;
+}
+
+<span class="class"><span class="keyword">interface</span> <span class="title">Resource</span> <span class="keyword">extends</span> <span class="title">Named</span> {</span>
+	isHazard: boolean;
+	harvest(a: Agent);
+	improve(a: Agent);
+	getImproveCost(): number;
+}
+
+<span class="class"><span class="keyword">class</span> <span class="title">RuntimeFactory</span> {</span>
+	<span class="keyword">static</span> create&lt;T&gt;(className: string, instanceParameters) : T{
+		<span class="keyword">var</span> newInstance = Object.create(window[className].prototype);
+		newInstance.constructor.apply(newInstance, instanceParameters);
+		<span class="keyword">return</span> newInstance;
+	}
+}
+
+<span class="class"><span class="keyword">class</span> <span class="title">World</span> {</span>
+	<span class="keyword">private</span> map: Resource[] = [];
+	<span class="keyword">private</span> players: Agent[] = [];
+	<span class="keyword">private</span> threadID: number;
+	<span class="keyword">private</span> currentGeneration: number = <span class="number">1</span>;
+	<span class="keyword">private</span> populationLifetime: number;
+	<span class="keyword">private</span> run: number = <span class="number">1</span>;
+	<span class="keyword">private</span> mutationRisk = <span class="number">.1</span>;
+	constructor(<span class="keyword">public</span> log: Log, <span class="keyword">public</span> runtime:number, <span class="keyword">private</span> initialPopulation:number, <span class="keyword">private</span> generationLifetime: number) {
+		log.out(<span class="string">"Simulation Start"</span>, <span class="string">"h2"</span>);
+		<span class="keyword">for</span>(<span class="keyword">var</span> i = <span class="number">0</span>; i &lt; initialPopulation; i++){
+			<span class="keyword">this</span>.players.push(<span class="keyword">new</span> Agent());
+		}
+		
+		<span class="keyword">this</span>.generateMap();
+		
+		<span class="keyword">this</span>.populationLifetime = generationLifetime;
+		<span class="keyword">this</span>.threadID = setInterval(<span class="keyword">this</span>.tick.bind(<span class="keyword">this</span>), <span class="number">500</span>);
+	}
+    closestResource(): Resource{
+        <span class="keyword">this</span>.log.selectMapTile((<span class="keyword">this</span>.generationLifetime - <span class="keyword">this</span>.populationLifetime ) % (<span class="keyword">this</span>.map.length / <span class="number">2</span>));
+        <span class="keyword">return</span> <span class="keyword">this</span>.map[<span class="keyword">this</span>.generationLifetime - <span class="keyword">this</span>.populationLifetime];
+	}
+	generateMap(){
+		<span class="keyword">this</span>.map = [];		
+		<span class="keyword">for</span>(<span class="keyword">var</span> i = <span class="number">0</span>; i &lt; <span class="keyword">this</span>.generationLifetime / <span class="number">2</span>; i++){
+			<span class="keyword">var</span> rand = Math.random();
+			<span class="keyword">if</span> (rand &gt; <span class="number">.8</span>)
+				<span class="keyword">this</span>.map.push(<span class="keyword">new</span> Trap());
+			<span class="keyword">else</span> <span class="keyword">if</span> (rand &gt; <span class="number">.5</span>)
+				<span class="keyword">this</span>.map.push(<span class="keyword">new</span> Memory());
+			<span class="keyword">else</span>
+				<span class="keyword">this</span>.map.push(<span class="keyword">new</span> Cycles());
+        }
+        <span class="keyword">this</span>.renderMap();
+		<span class="keyword">this</span>.map = <span class="keyword">this</span>.map.concat(<span class="keyword">this</span>.map);
+    }
+    renderMap() {
+        <span class="keyword">while</span> (log.mapDiv.firstChild) {
+            log.mapDiv.removeChild(log.mapDiv.firstChild);
+        }
+        log.mapOut(<span class="string">"Map"</span>, <span class="string">"h2"</span>);
+        <span class="keyword">for</span> (<span class="keyword">var</span> i = <span class="number">0</span>; i &lt; <span class="keyword">this</span>.map.length; i++) {
+            <span class="keyword">var</span> resource = <span class="keyword">this</span>.map[i];
+            log.mapOut(resource.name, <span class="string">"div"</span>, <span class="string">"tile resource-"</span>+resource.name.toLowerCase());
+        }
+    }
+	generateGeneration(){
+		<span class="keyword">this</span>.log.out(<span class="string">"Repopulating"</span>, <span class="string">"h3"</span>);
+		<span class="keyword">var</span> mindex: number = -<span class="number">1</span>;
+		<span class="keyword">var</span> min: number = <span class="number">999</span>;
+		<span class="keyword">for</span>(<span class="keyword">var</span> i = <span class="number">0</span>; i &lt; <span class="keyword">this</span>.players.length; i++){
+			<span class="keyword">if</span> (<span class="keyword">this</span>.players[i].getFitness() &lt; min){
+				mindex = i;
+				min = <span class="keyword">this</span>.players[i].getFitness();	
+			}
+			
+            <span class="keyword">this</span>.log.out(<span class="keyword">this</span>.players[i].geneString());
+		}
+		<span class="keyword">for</span>(<span class="keyword">var</span> i = <span class="keyword">this</span>.players.length - <span class="number">1</span>; i &gt; <span class="number">0</span>; i--){
+			<span class="keyword">if</span> (<span class="keyword">this</span>.players[i].getFitness() &lt;= min)
+				<span class="keyword">this</span>.players.splice(i, <span class="number">1</span>);
+		}
+		<span class="keyword">var</span> survivingCount = <span class="keyword">this</span>.players.length;
+		<span class="keyword">var</span> newPlayers = [];
+		<span class="keyword">for</span>(<span class="keyword">var</span> i = <span class="number">0</span>; i &lt; <span class="keyword">this</span>.initialPopulation; i++){
+			<span class="keyword">var</span> mom: Individual = <span class="keyword">this</span>.players[Math.round(Math.random()*(survivingCount-<span class="number">1</span>))];
+			<span class="keyword">var</span> dad: Individual = <span class="keyword">this</span>.players[Math.round(Math.random()*(survivingCount-<span class="number">1</span>))];
+			newPlayers.push(<span class="keyword">new</span> Agent(dad, mom));
+		}
+		<span class="keyword">this</span>.players = newPlayers;
+    } 
+    evaluateGeneration() {
+        <span class="keyword">this</span>.players.forEach(p =&gt; {
+            Statistics.Tracker.logAgent(p.name, p.geneString(), p.getFitness());
+        });		
+        <span class="keyword">this</span>.log.out(<span class="string">"Best Agent: "</span> + Statistics.Tracker.bestAgentName + <span class="string">": �"</span> + Statistics.Tracker.bestAgentFitness, <span class="string">"h3"</span>);
+        <span class="keyword">this</span>.log.out(<span class="string">"Best Genes: "</span> + Statistics.Tracker.bestAgentGeneString, <span class="string">"h3"</span>);
+    }
+	tick(){
+		<span class="keyword">this</span>.log.out(<span class="string">"Turn #"</span>+(<span class="keyword">this</span>.run), <span class="string">"h4"</span>);
+        <span class="keyword">var</span> statuses = [];
+        <span class="keyword">this</span>.log.out(<span class="string">"Current tile: "</span>+<span class="keyword">this</span>.closestResource().name, <span class="string">"p"</span>)
+		<span class="keyword">this</span>.players.forEach(p =&gt; {
+			statuses.push(p.tick(<span class="keyword">this</span>, <span class="keyword">this</span>.log));	
+		});		
+		statuses.forEach(s =&gt;{
+			<span class="keyword">this</span>.log.out(s, <span class="string">"span"</span>);
+        });
+        <span class="keyword">this</span>.log.out(<span class="string">"|"</span>, <span class="string">"span"</span>);
+		<span class="keyword">this</span>.run++;
+		
+        <span class="keyword">if</span> (<span class="keyword">this</span>.run &gt; <span class="keyword">this</span>.runtime) {
+            <span class="keyword">this</span>.evaluateGeneration();
+			clearInterval(<span class="keyword">this</span>.threadID);
+			<span class="keyword">this</span>.log.out(<span class="string">"Simulation Finished"</span>, <span class="string">"h2"</span>);
+			<span class="keyword">return</span>;
+		}		
+		
+		<span class="keyword">this</span>.populationLifetime--;
+		
+        <span class="keyword">if</span> (<span class="keyword">this</span>.populationLifetime === <span class="number">0</span>) {
+            <span class="keyword">this</span>.evaluateGeneration();
+			<span class="keyword">this</span>.generateGeneration();
+			<span class="keyword">this</span>.generateMap();
+			<span class="keyword">this</span>.currentGeneration++;
+			<span class="keyword">this</span>.populationLifetime = <span class="keyword">this</span>.generationLifetime;
+			<span class="keyword">this</span>.log.out(<span class="string">"Beginning generation "</span>+<span class="keyword">this</span>.currentGeneration, <span class="string">"h3"</span>)
+		}
+		
+	}
+}</div></div></div><div class="segment"><div class="comments"><div class="wrapper"><p>exposes properties for expression (name, value) and inheritance (dominant, recessive)</p></div></div><div class="code"><div class="wrapper"><span class="class"><span class="keyword">class</span> <span class="title">Gene</span> <span class="keyword">implements</span> <span class="title">Named</span>{</span>
+	<span class="keyword">static</span> geneNames: string[] = [<span class="string">"shy"</span>, <span class="string">"aggression"</span>, <span class="string">"intelligence"</span>, <span class="string">"curiosity"</span>];
+	<span class="keyword">public</span> dominant: boolean = <span class="literal">true</span>;
+    <span class="keyword">public</span> degree: number;
+    <span class="keyword">public</span> multiple: boolean = <span class="literal">false</span>;
+	<span class="keyword">get</span> isDominant(): boolean{
+		<span class="keyword">return</span> <span class="keyword">this</span>.dominant;
+	}
+	<span class="keyword">get</span> isRecessive(): boolean{
+		<span class="keyword">return</span> !<span class="keyword">this</span>.dominant;
+	}
+	constructor(<span class="keyword">public</span> name: string, 
+				       rawValue: string,
+				<span class="keyword">public</span> dominantExpression:any,
+				<span class="keyword">public</span> recessiveExpression: any){
+		<span class="keyword">this</span>.dominant = rawValue[<span class="number">0</span>] === rawValue[<span class="number">0</span>].toUpperCase();
+	}
+	<span class="keyword">static</span> create(name: string, chromatin: string): Gene{
+		<span class="keyword">return</span> RuntimeFactory.create&lt;Gene&gt;(name, [name, chromatin]);
+	}
+}
+<span class="class"><span class="keyword">class</span> <span class="title">ShyGene</span> <span class="keyword">extends</span> <span class="title">Gene</span>{</span>
+	constructor(<span class="keyword">public</span> name: string, 
+				       rawValue: string){
+        <span class="keyword">super</span>(name, rawValue, <span class="literal">false</span>, <span class="literal">true</span>);
+	}
+}
+<span class="class"><span class="keyword">class</span> <span class="title">AggressionGene</span> <span class="keyword">extends</span> <span class="title">Gene</span>{</span>
+	constructor(<span class="keyword">public</span> name: string, 
+                       rawValue: string){
+        <span class="keyword">super</span>(name, rawValue, <span class="literal">true</span>, <span class="literal">false</span>);
+	}
+}
+<span class="class"><span class="keyword">class</span> <span class="title">CuriosityGene</span> <span class="keyword">extends</span> <span class="title">Gene</span>{</span>
+	constructor(<span class="keyword">public</span> name: string, 
+                       rawValue: string){
+        <span class="keyword">super</span>(name, rawValue, <span class="literal">false</span>, <span class="literal">true</span>);
+	}
+}
+<span class="class"><span class="keyword">class</span> <span class="title">IntelligenceGene</span> <span class="keyword">extends</span> <span class="title">Gene</span>{</span>
+    constructor(<span class="keyword">public</span> name: string,
+                       rawValue: string) {
+        <span class="keyword">super</span>(name, rawValue, <span class="literal">false</span>, <span class="literal">true</span>);
+	}
+}</div></div></div><div class="segment nocode"><div class="comments"><div class="wrapper"><p>idea: a ‘curiousity’ gene that controls whether or not an individual interacts with the mutator resource</p></div></div></div><div class="segment"><div class="comments"><div class="wrapper"><p>a chromosome is a collection of loci (a string:Gene map)</p></div></div><div class="code"><div class="wrapper"><span class="class"><span class="keyword">class</span> <span class="title">Chromosome</span>{</span>
+	<span class="keyword">public</span> geneMap: Object = {};
+	constructor(rawChromatin? : string){
+		<span class="keyword">var</span> values;
+		<span class="keyword">if</span> (rawChromatin){
+			values = rawChromatin.split(<span class="string">"|"</span>);
+		} <span class="keyword">else</span> {
+			values = <span class="literal">null</span>;	
+		}
+		<span class="keyword">for</span>(<span class="keyword">var</span> i = <span class="number">0</span>; i &lt; Gene.geneNames.length; i++){			</div></div></div><div class="segment"><div class="comments"><div class="wrapper"><p>todo: move this to gene.create
+todo: actually reference inherited chromatin from the rawChromatin/values collection</p></div></div><div class="code"><div class="wrapper">            <span class="keyword">var</span> typeName: string = Gene.geneNames[i].substr(<span class="number">0</span>, <span class="number">1</span>).toUpperCase() + Gene.geneNames[i].substring(<span class="number">1</span>) + <span class="string">"Gene"</span>;	
+            <span class="keyword">var</span> rawValue: string;
+            <span class="keyword">if</span> (values == <span class="literal">null</span>) {</div></div></div><div class="segment"><div class="comments"><div class="wrapper"><p>by default, 50% chance to have either dominant or recessive gene</p></div></div><div class="code"><div class="wrapper">                rawValue = (Math.random() &gt; <span class="number">.5</span>) ? <span class="string">"D"</span> : <span class="string">"d"</span>;
+            } <span class="keyword">else</span> {
+                rawValue = values[i];
+            }
+			<span class="keyword">this</span>.geneMap[Gene.geneNames[i]] = Gene.create(typeName,  rawValue);
+		}
+	}
+	mutate(){
+		
+	}
+	getChromatin(geneName: string): string{
+		<span class="keyword">var</span> output: string = <span class="string">""</span>;</div></div></div><div class="segment"><div class="comments"><div class="wrapper"><p>output += this.geneMap<span class="autolink">[geneName]</span>.value + “:”;</p></div></div><div class="code"><div class="wrapper">		output += (<span class="keyword">this</span>.geneMap[geneName].isDominant ? <span class="string">"D"</span> : <span class="string">"d"</span>);
+		<span class="keyword">return</span> output;
+	}
+}</div></div></div><div class="segment"><div class="comments"><div class="wrapper"><p>a genotype holds two chromosomes and exposes the GeneExpression API for phenotypes</p></div></div><div class="code"><div class="wrapper"><span class="class"><span class="keyword">class</span> <span class="title">Genotype</span>{</span>
+	<span class="keyword">private</span> chromosomeA: Chromosome;
+	<span class="keyword">private</span> chromosomeB: Chromosome;
+	<span class="keyword">private</span> phenotype: Object = {};
+	constructor(environmentalMutationRisk: number, parentA?: Individual, parentB?: Individual){
+		<span class="keyword">var</span> chrA: string;
+		<span class="keyword">var</span> chrB: string;</div></div></div><div class="segment"><div class="comments"><div class="wrapper"><p>upon creation, either inherit randomly from parental genotypes</p></div></div><div class="code"><div class="wrapper">		<span class="keyword">if</span> (parentA &amp;&amp; parentB){
+			<span class="keyword">var</span> gA: Genotype = parentA.getGenotype();
+			<span class="keyword">var</span> gB: Genotype = parentB.getGenotype();</div></div></div><div class="segment"><div class="comments"><div class="wrapper"><p>extract the chromatin</p></div></div><div class="code"><div class="wrapper">			chrA = gA.getChromatin();
+			chrB = gB.getChromatin();
+		}</div></div></div><div class="segment"><div class="comments"><div class="wrapper"><p>or randomly create a new genotype
+finalize with some transposition</p></div></div><div class="code"><div class="wrapper">		<span class="keyword">if</span> (Math.random() &lt; environmentalMutationRisk){</div></div></div><div class="segment"><div class="comments"><div class="wrapper"><p>transpose</p></div></div><div class="code"><div class="wrapper">		}
+        <span class="keyword">this</span>.chromosomeA = <span class="keyword">new</span> Chromosome(chrA);
+		<span class="keyword">this</span>.chromosomeB = <span class="keyword">new</span> Chromosome(chrB);</div></div></div><div class="segment"><div class="comments"><div class="wrapper"><p>and possibly randomly mutate a gene or two</p></div></div><div class="code"><div class="wrapper">		<span class="keyword">if</span> (Math.random() &lt; environmentalMutationRisk){
+            <span class="keyword">if</span> (Math.random() &gt; <span class="number">.5</span>) {
+                <span class="keyword">this</span>.chromosomeA.mutate();
+            } <span class="keyword">else</span> {
+                <span class="keyword">this</span>.chromosomeB.mutate();
+            }
+		}
+	}
+	expressedPhenotype(geneName: string){		
+		<span class="keyword">var</span> cachedPhenotype: any = <span class="keyword">this</span>.phenotype[geneName];
+        <span class="keyword">if</span> (cachedPhenotype != <span class="literal">null</span>) {
+            <span class="keyword">return</span> cachedPhenotype;
+        } <span class="keyword">else</span> {
+			<span class="keyword">var</span> gA: Gene = <span class="keyword">this</span>.chromosomeA.geneMap[geneName];</div></div></div><div class="segment"><div class="comments"><div class="wrapper"><p>if it‘s dominant, it’s expressed</p></div></div><div class="code"><div class="wrapper">			<span class="keyword">if</span> (gA.isDominant){
+				<span class="keyword">this</span>.phenotype[geneName] = gA.dominantExpression;
+			} <span class="keyword">else</span> { 
+				<span class="keyword">var</span> gB: Gene = <span class="keyword">this</span>.chromosomeB.geneMap[geneName];
+				<span class="keyword">if</span> (gB.isDominant){
+					<span class="keyword">this</span>.phenotype[geneName] = gB.dominantExpression;
+				} <span class="keyword">else</span> {
+					<span class="keyword">this</span>.phenotype[geneName] = gB.recessiveExpression;
+				}
+			}
+			<span class="keyword">return</span> <span class="keyword">this</span>.phenotype[geneName];
+		}
+	}
+	getChromatin(): string{
+		<span class="keyword">var</span> str = <span class="string">""</span>;
+		<span class="keyword">for</span>(<span class="keyword">var</span> i = <span class="number">0</span>; i &lt; Gene.geneNames.length; i++){
+            <span class="keyword">if</span> (Math.random() &gt; <span class="number">.5</span>) {
+                str += <span class="keyword">this</span>.chromosomeA.getChromatin(Gene.geneNames[i]);
+            } <span class="keyword">else</span> {
+                str += <span class="keyword">this</span>.chromosomeB.getChromatin(Gene.geneNames[i]);
+            }
+			
+            <span class="keyword">if</span> (i &lt; Gene.geneNames.length - <span class="number">1</span>) {
+                str += <span class="string">"|"</span>;
+            }
+		}
+		<span class="keyword">return</span> str;
+	}
+	status(): string{
+		<span class="keyword">var</span> output: string = <span class="string">""</span>;
+		<span class="keyword">for</span>(<span class="keyword">var</span> i = <span class="number">0</span>; i &lt; Gene.geneNames.length; i++){
+			<span class="keyword">var</span> thisName = Gene.geneNames[i];
+			<span class="keyword">var</span> left: Gene = <span class="keyword">this</span>.chromosomeA.geneMap[thisName];
+			<span class="keyword">var</span> right: Gene = <span class="keyword">this</span>.chromosomeB.geneMap[thisName];
+			
+			thisName = thisName.substr(<span class="number">0</span>, <span class="number">3</span>);
+			
+            <span class="keyword">if</span> (left.isRecessive &amp;&amp; right.isRecessive) {
+                output += thisName;
+            } <span class="keyword">else</span> <span class="keyword">if</span> (left.isDominant &amp;&amp; left.isDominant) {
+                output += thisName.toUpperCase();
+            } <span class="keyword">else</span> {
+                output += thisName[<span class="number">0</span>].toUpperCase() + thisName.substr(<span class="number">1</span>, <span class="number">2</span>);
+            }
+				
+            <span class="keyword">if</span> (i &lt; Gene.geneNames.length - <span class="number">1</span>) {
+                output += <span class="string">"|"</span>;
+            }
+		}
+		<span class="keyword">return</span> output;
+	}
+}
+
+<span class="class"><span class="keyword">class</span> <span class="title">Agent</span> <span class="keyword">implements</span> <span class="title">Named</span>, <span class="title">Individual</span>{</span>
+	cycles: number = <span class="number">0</span>;
+	<span class="keyword">private</span> genotype: Genotype;
+	<span class="keyword">public</span> name: string;
+	<span class="keyword">get</span> displayName(): string{
+		<span class="keyword">return</span> <span class="string">"&lt;span style='color:darkblue;font-weight:bold'&gt;"</span>+<span class="keyword">this</span>.name+<span class="string">"&lt;/span&gt;"</span>;
+	}
+	<span class="keyword">static</span> names: string[] = [<span class="string">"Lex"</span>, <span class="string">"Ram"</span>, <span class="string">"Car"</span>, <span class="string">"Dig"</span>, <span class="string">"Red"</span>, <span class="string">"Bin"</span>, <span class="string">"Ana"</span>, <span class="string">"Lib"</span>, <span class="string">"Sis"</span>, <span class="string">"Net"</span>, <span class="string">"Led"</span>, <span class="string">"Bus"</span>];
+	<span class="keyword">static</span> getRandomName(): string {
+		<span class="keyword">return</span> Agent.names[Math.round(Math.random()*(Agent.names.length-<span class="number">1</span>))];
+	}
+	<span class="keyword">static</span> getLastName(name: string): string{
+		<span class="keyword">var</span> split: string[] = name.split(<span class="string">" "</span>);
+        <span class="keyword">if</span> (split.length &gt; <span class="number">1</span>) {
+            <span class="keyword">return</span> split[<span class="number">1</span>];
+        } <span class="keyword">else</span> {
+            <span class="keyword">return</span> name;
+        }
+	}
+	<span class="keyword">static</span> getFamilyName(m: Individual, d: Individual){
+		<span class="keyword">var</span> mStr = Agent.getLastName(m.name);
+        <span class="keyword">var</span> dStr = Agent.getLastName(d.name);
+
+        <span class="keyword">if</span> (mStr.length &gt; <span class="number">3</span>) {
+            <span class="keyword">return</span> dStr;
+        }
+
+		<span class="keyword">return</span> dStr + mStr.toLowerCase();
+	}
+	constructor(<span class="keyword">private</span> dad?: Individual, <span class="keyword">private</span> mom?: Individual) {
+		<span class="keyword">if</span> (dad &amp;&amp; mom){
+			<span class="keyword">this</span>.name = Agent.getRandomName() + <span class="string">" "</span> + Agent.getFamilyName(mom, dad);
+			<span class="keyword">this</span>.genotype = <span class="keyword">new</span> Genotype(<span class="number">.5</span>, dad, mom);
+		} <span class="keyword">else</span> {
+			<span class="keyword">this</span>.name = Agent.getRandomName();
+			<span class="keyword">this</span>.genotype = <span class="keyword">new</span> Genotype(<span class="number">.5</span>);
+		} 
+	}
+	getGenotype(){
+		<span class="keyword">return</span> <span class="keyword">this</span>.genotype;
+	}
+	getFitness():number{
+		<span class="keyword">return</span> <span class="keyword">this</span>.cycles;
+	}
+	status(): string{
+        <span class="keyword">return</span> (<span class="string">"| "</span> + <span class="keyword">this</span>.name + <span class="string">": "</span> + <span class="keyword">this</span>.cycles + <span class="string">"� "</span>);
+	}
+	geneString(): string{
+		<span class="keyword">return</span> (<span class="string">"| "</span>+<span class="keyword">this</span>.genotype.status()+<span class="string">" |"</span>);
+	}
+	tick(world: World, log:Log): string{
+		<span class="keyword">if</span> (<span class="keyword">this</span>.genotype.expressedPhenotype(<span class="string">"shy"</span>) &amp;&amp; (Math.random() &gt; <span class="number">.5</span>)){
+			log.out(<span class="keyword">this</span>.displayName +<span class="string">" does not operate"</span>);
+		} <span class="keyword">else</span> {
+			<span class="keyword">var</span> r = world.closestResource();</div></div></div><div class="segment"><div class="comments"><div class="wrapper"><p>log.out(this.displayName +“ approaches a ”+r.name);</p></div></div><div class="code"><div class="wrapper">			
+			<span class="keyword">if</span> (r.isHazard){
+				<span class="keyword">if</span> (<span class="keyword">this</span>.genotype.expressedPhenotype(<span class="string">"aggression"</span>) &amp;&amp; <span class="keyword">this</span>.cycles &gt; r.getImproveCost()){
+					r.improve(<span class="keyword">this</span>);
+					log.out(<span class="keyword">this</span>.displayName + <span class="string">" attacks the "</span> + r.name);
+				} <span class="keyword">else</span> {
+					r.harvest(<span class="keyword">this</span>);
+					log.out(<span class="keyword">this</span>.displayName + <span class="string">" is hurt by the "</span> + r.name);
+				}
+			} <span class="keyword">else</span> <span class="keyword">if</span> (r <span class="keyword">instanceof</span> Cycles) {			
+				<span class="keyword">if</span> (<span class="keyword">this</span>.genotype.expressedPhenotype(<span class="string">"intelligence"</span>) &amp;&amp; <span class="keyword">this</span>.cycles &gt; r.getImproveCost()){
+					r.improve(<span class="keyword">this</span>);
+					log.out(<span class="keyword">this</span>.displayName + <span class="string">" improves the "</span> + r.name);
+				} <span class="keyword">else</span> {
+					r.harvest(<span class="keyword">this</span>);
+					log.out(<span class="keyword">this</span>.displayName + <span class="string">" harvests the "</span> + r.name);
+				}
+			} <span class="keyword">else</span> {
+				<span class="keyword">var</span> harvestNotStore = Math.random() &gt; <span class="number">.5</span>;
+				<span class="keyword">if</span> (<span class="keyword">this</span>.genotype.expressedPhenotype(<span class="string">"intelligence"</span>) || harvestNotStore){
+					r.harvest(<span class="keyword">this</span>);
+					log.out(<span class="keyword">this</span>.displayName + <span class="string">" harvests the "</span> + r.name);
+				} <span class="keyword">else</span> {
+					r.improve(<span class="keyword">this</span>);
+					log.out(<span class="keyword">this</span>.displayName + <span class="string">" improves the "</span> + r.name);					
+				}
+			}
+		}
+		<span class="keyword">return</span> <span class="keyword">this</span>.status();
+	}
+}
+
+<span class="class"><span class="keyword">class</span> <span class="title">Cycles</span> <span class="keyword">implements</span> <span class="title">Resource</span>{</span>
+	<span class="keyword">public</span> isHazard: boolean = <span class="literal">false</span>;
+	<span class="keyword">private</span> harvestRate: number = <span class="number">1</span>;
+	<span class="keyword">public</span> name: string = <span class="string">"CPU"</span>;
+    harvest(a: Agent) {
+        a.cycles += <span class="keyword">this</span>.harvestRate;
+    }
+	getImproveCost(): number{
+		<span class="keyword">return</span> <span class="keyword">this</span>.harvestRate + <span class="number">1</span>;
+	}
+	improve(a: Agent){
+		a.cycles -= <span class="keyword">this</span>.getImproveCost();
+		<span class="keyword">this</span>.harvestRate++;
+	}
+}
+<span class="class"><span class="keyword">class</span> <span class="title">Memory</span> <span class="keyword">implements</span> <span class="title">Resource</span>{</span>
+	<span class="keyword">public</span> isHazard: boolean = <span class="literal">false</span>;
+	<span class="keyword">private</span> cache: number = <span class="number">1</span>;
+	<span class="keyword">public</span> name: string = <span class="string">"RAM"</span>;
+    harvest(a: Agent) {
+        a.cycles += <span class="keyword">this</span>.cache;
+		<span class="keyword">this</span>.cache = <span class="number">3</span>;
+    }
+	getImproveCost(): number{
+		<span class="keyword">return</span> <span class="number">999</span>;
+	}
+	improve(a: Agent){
+		<span class="keyword">this</span>.cache++;
+
+	}
+}
+
+<span class="class"><span class="keyword">class</span> <span class="title">Trap</span> <span class="keyword">implements</span> <span class="title">Resource</span>{</span>
+	<span class="keyword">public</span> isHazard: boolean = <span class="literal">true</span>;
+	<span class="keyword">private</span> trapStack: number = Math.round(Math.random()*<span class="number">2</span>)+<span class="number">1</span>;
+	<span class="keyword">public</span> name: string = <span class="string">"Trap"</span>;
+    harvest(a: Agent) {
+        <span class="keyword">if</span> (<span class="keyword">this</span>.trapStack &gt; <span class="number">0</span> &amp;&amp; Math.random() &gt; <span class="number">.5</span>) {
+            a.cycles--;
+        }
+    }
+	getImproveCost(): number{
+		<span class="keyword">return</span> <span class="keyword">this</span>.trapStack;
+	}
+	improve(a: Agent){
+		a.cycles--;
+		<span class="keyword">this</span>.trapStack--;
+	}	
+}</div></div></div><div class="segment"><div class="comments"><div class="wrapper"><p>idea: a resource that increases the mutation risk of an individual</p></div></div><div class="code"><div class="wrapper"><span class="class"><span class="keyword">class</span> <span class="title">Log</span> {</span>
+    <span class="keyword">public</span> logDiv: HTMLDivElement;
+    <span class="keyword">public</span> mapDiv: HTMLDivElement;
+    constructor(<span class="keyword">private</span> centerDiv: Node) {
+        <span class="keyword">this</span>.logDiv = &lt;HTMLDivElement&gt;<span class="keyword">this</span>.centerDiv.childNodes[<span class="number">1</span>];
+        <span class="keyword">this</span>.mapDiv = &lt;HTMLDivElement&gt;<span class="keyword">this</span>.centerDiv.childNodes[<span class="number">3</span>];
+    }
+    mapOut(content: string, element?: string, classString?: string) {
+        <span class="keyword">this</span>.write(content, element || <span class="string">"div"</span>, classString || <span class="string">""</span>, <span class="literal">true</span>);
+    }
+	out(content: string, element?: string, classString?: string){
+        <span class="keyword">this</span>.write(content, element || <span class="string">"div"</span>, classString || <span class="string">""</span>, <span class="literal">false</span>);
+    }
+    <span class="keyword">private</span> write(content: string, element: string, classString: string, toMap: boolean) {
+        <span class="keyword">var</span> newDiv = document.createElement(element);
+        newDiv.innerHTML = content;
+        newDiv.className = classString;
+        <span class="keyword">if</span> (toMap) {
+            <span class="keyword">this</span>.mapDiv.appendChild(newDiv);
+        } <span class="keyword">else</span> {
+            <span class="keyword">this</span>.logDiv.appendChild(newDiv);
+        }
+    }
+    selectMapTile(index: number) {
+        <span class="keyword">var</span> oldSelecteds: NodeList = <span class="keyword">this</span>.mapDiv.querySelectorAll(<span class="string">".current"</span>);
+        <span class="keyword">if</span> (oldSelecteds.length &gt; <span class="number">0</span>) {
+            <span class="keyword">var</span> oldSelected: HTMLDivElement = &lt;HTMLDivElement&gt;oldSelecteds[<span class="number">0</span>];
+            oldSelected.classList.remove(<span class="string">"current"</span>);
+        }
+        <span class="keyword">var</span> newSelected: HTMLDivElement = &lt;HTMLDivElement&gt;<span class="keyword">this</span>.mapDiv.querySelectorAll(<span class="string">".tile"</span>)[index];
+        newSelected.classList.add(<span class="string">"current"</span>);
+    }
+}
+
+<span class="keyword">var</span> log: Log = <span class="keyword">new</span> Log(document.getElementsByClassName(<span class="string">"center"</span>)[<span class="number">0</span>]);
+<span class="keyword">var</span> world: World = <span class="keyword">new</span> World(log, <span class="number">48</span>, <span class="number">5</span>, <span class="number">8</span>);</div></div></div><div id="segment-footer"><div id="footer"><a href="https://github.com/druide/citare-scriptum" target="_blank">Generated by Citare scriptum</a></div></div></div></body></html>
