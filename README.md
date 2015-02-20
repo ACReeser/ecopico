@@ -6,13 +6,24 @@ A teeny tiny evolutionary genetic simulator
 ##Setup
 ecopico is written in Typescript. Index.html uses the Javascript that is output by a Typescript transpiler.
 ###Windows
+
+####VS
 Visual Studio has a Typescript compiler plugin
+
+####CLI
+
+```
+npm install typescript
+
+node node_modules/typescript/bin/tsc.js ecopico.ts -target es6
+```
+
 ###Unix
 
 ```
 npm install typescript
 
-node built/local/tsc.js ecopico.ts
+node built/local/tsc.js ecopico.ts -target es6
 ```
 
 ##Documentation
