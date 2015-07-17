@@ -24,8 +24,23 @@ class RuntimeFactory {
 	}
 }
 
+class BaseResource implements Resource {
+    public name: string = "BaseResource";
+    public isHazard: boolean;
+    public harvest(a: Agent) {    }
+    public improve(a: Agent) {    }
+    public getImproveCost(): number {
+        return 0;
+    }
+}
+
+class ResourceChance {
+    constructor(public resource: BaseResource, public chance: number) {}
+}
+
 class World {
-	private map: Resource[] = [];
+    private map: Resource[] = [];
+    private currentBiome: Biome;
 	private players: Agent[] = [];
 	private threadID: number;
 	private currentGeneration: number = 1;
@@ -48,15 +63,10 @@ class World {
         return this.map[this.generationLifetime - this.populationLifetime];
 	}
 	generateMap(){
-		this.map = [];		
-		for(var i = 0; i < this.generationLifetime / 2; i++){
-			var rand = Math.random();
-			if (rand > .8)
-				this.map.push(new Trap());
-			else if (rand > .5)
-				this.map.push(new Memory());
-			else
-				this.map.push(new Cycles());
+        this.map = [];		
+        this.currentBiome = Biome.Grassland;
+        for (var i = 0; i < this.generationLifetime / 2; i++){
+            this.map.push(this.currentBiome.getResource());
         }
         this.renderMap();
 		this.map = this.map.concat(this.map);
@@ -106,7 +116,8 @@ class World {
 	tick(){
 		this.log.out("Turn #"+(this.run), "h4");
         var statuses = [];
-        this.log.out("Current tile: "+this.closestResource().name, "p")
+        this.log.out("Current tile: " + this.closestResource().name, "p")
+        //idea: sort player time by 'speed' rating
 		this.players.forEach(p => {
 			statuses.push(p.tick(this, this.log));	
 		});		
@@ -184,7 +195,9 @@ class IntelligenceGene extends Gene{
 	}
 }
 // idea: a 'curiousity' gene that controls whether or not an individual interacts with the mutator resource
-
+// idea: speed rating = sprint + (endurance*food)
+// idea: 'sprint' and 'endurance' phenotypes
+// idea: Memes - socially acquired traits
 // a chromosome is a collection of loci (a string:Gene map)
 class Chromosome{
 	public geneMap: Object = {};
@@ -312,10 +325,28 @@ class Genotype{
 	}
 }
 
+class AgentMemoryBank {
+    private store: Object = {};
+    addMemory(situation: string, action: string, utilityChange: number) {
+        if ((this.store[situation] == null) || (this.store[situation].utilityChange < utilityChange))
+            this.store[situation] = new AgentMemory(utilityChange, action);
+    }
+    remember(situation: string) {
+        if (this.store[situation] == null)
+            return '';
+        else
+            return this.store[situation].action;
+    }
+}
+
+class AgentMemory {
+    constructor(public utilityChange: number, public action: string) { }
+}
 class Agent implements Named, Individual{
-	cycles: number = 0;
+	food: number = 0;
 	private genotype: Genotype;
-	public name: string;
+    public name: string;
+    private memory: AgentMemoryBank = new AgentMemoryBank();
 	get displayName(): string{
 		return "<span style='color:darkblue;font-weight:bold'>"+this.name+"</span>";
 	}
@@ -350,77 +381,100 @@ class Agent implements Named, Individual{
 			this.genotype = new Genotype(.5);
 		} 
 	}
-	getGenotype(){
+    getGenotype() {
+        this.memory['green'] = 'blue';
 		return this.genotype;
 	}
 	getFitness():number{
-		return this.cycles;
+		return this.food;
 	}
 	status(): string{
-        return ("| " + this.name + ": " + this.cycles + "¢ ");
+        return ("| " + this.name + ": " + this.food + "¢ ");
 	}
 	geneString(): string{
 		return ("| "+this.genotype.status()+" |");
-	}
-	tick(world: World, log:Log): string{
+    }
+    //idea: memory - given inputs, remember most utility move
+    //idea: pass down the tick to the individual phenotype
+    //then you can completely abstract this
+    //you'd then have a ordering problem though, aka which phenotype kicks in first?
+    tick(world: World, log: Log): string{
+
 		if (this.genotype.expressedPhenotype("shy") && (Math.random() > .5)){
-			log.out(this.displayName +" does not operate");
+			log.out(this.displayName +" does nothing");
 		} else {
-			var r = world.closestResource();
+            var r = world.closestResource(),
+                oldUtility = this.food,
+                isFarm = r instanceof Cycles,
+                isAmbushPredator = r instanceof AmbushPredator,
+                isCache = r instanceof Memory,
+                action = "",
+                displayActionLink = "",
+                situation = isFarm+"|"+isAmbushPredator+"|"+isCache;
 			// log.out(this.displayName +" approaches a "+r.name);
 			
-			if (r.isHazard){
-				if (this.genotype.expressedPhenotype("aggression") && this.cycles > r.getImproveCost()){
-					r.improve(this);
-					log.out(this.displayName + " attacks the " + r.name);
-				} else {
-					r.harvest(this);
-					log.out(this.displayName + " is hurt by the " + r.name);
-				}
-			} else if (r instanceof Cycles) {			
-				if (this.genotype.expressedPhenotype("intelligence") && this.cycles > r.getImproveCost()){
-					r.improve(this);
-					log.out(this.displayName + " improves the " + r.name);
-				} else {
-					r.harvest(this);
-					log.out(this.displayName + " harvests the " + r.name);
-				}
-			} else {
-				var harvestNotStore = Math.random() > .5;
-				if (this.genotype.expressedPhenotype("intelligence") || harvestNotStore){
-					r.harvest(this);
-					log.out(this.displayName + " harvests the " + r.name);
-				} else {
-					r.improve(this);
-					log.out(this.displayName + " improves the " + r.name);					
-				}
-			}
+            action = this.memory.remember(situation);
+            //todo: if action exists and utilityChange is > 0 (don't do things that hurt you)
+            if (action == "") {
+                if (isAmbushPredator) {
+                    if (this.genotype.expressedPhenotype("aggression") && this.food > r.getImproveCost()) {
+                        action = "improve";
+                        //todo: move these dal assignments to the resource
+                        displayActionLink = " attacks the ";
+                    } else {
+                        action = "harvest";
+                        displayActionLink = " is hurt by the ";
+                    }
+                } else if (isFarm) {
+                    if (this.genotype.expressedPhenotype("intelligence") && this.food > r.getImproveCost()) {
+                        action = "improve";
+                    } else {
+                        action = "harvest";
+                    }
+                } else if (isCache) {
+                    var harvestNotStore = Math.random() > .5;
+                    if (this.genotype.expressedPhenotype("intelligence") || harvestNotStore) {
+                        action = "harvest";
+                    } else {
+                        action = "improve";
+                    }
+                }
+            } else {
+                console.log(this.name + " remembers to "+ action);		
+            }
+            //actually do the thing
+            r[action](this);
+
+            displayActionLink = (displayActionLink == "") ? " " + action + "s the " : displayActionLink;
+            log.out(this.displayName + displayActionLink + r.name);		
+            //add a memory with the situation, action used, and change in utility
+            this.memory.addMemory(situation, action, this.food - oldUtility);
 		}
 		return this.status();
 	}
 }
-
+//todo - change hierarchy to tile > resource + hazard
 class Cycles implements Resource{
 	public isHazard: boolean = false;
-	private harvestRate: number = 1;
-	public name: string = "CPU";
+	private cropYield: number = 1;
+	public name: string = "Farm"; //todo: farms are staying improved across generations???
     harvest(a: Agent) {
-        a.cycles += this.harvestRate;
+        a.food += this.cropYield;
     }
 	getImproveCost(): number{
-		return this.harvestRate + 1;
+		return this.cropYield + 1;
 	}
 	improve(a: Agent){
-		a.cycles -= this.getImproveCost();
-		this.harvestRate++;
+		a.food -= this.getImproveCost();
+		this.cropYield++;
 	}
 }
 class Memory implements Resource{
 	public isHazard: boolean = false;
 	private cache: number = 1;
-	public name: string = "RAM";
+	public name: string = "Cache";
     harvest(a: Agent) {
-        a.cycles += this.cache;
+        a.food += this.cache;
 		this.cache = 3;
     }
 	getImproveCost(): number{
@@ -432,26 +486,72 @@ class Memory implements Resource{
 	}
 }
 
-class Trap implements Resource{
+//todo - change to Hazard ancestor, with 'fight' and 'flight' options
+class AmbushPredator implements Resource{
 	public isHazard: boolean = true;
-	private trapStack: number = Math.round(Math.random()*2)+1;
-	public name: string = "Trap";
+	private health: number = Math.round(Math.random()*2)+1;
+    public name: string = "AmbushPredator";
+    //todo: have this modified by an alertness rating
     harvest(a: Agent) {
-        if (this.trapStack > 0 && Math.random() > .5) {
-            a.cycles--;
+        if (this.health > 0 && Math.random() > .5) {
+            a.food--;
         }
     }
 	getImproveCost(): number{
-		return this.trapStack;
+		return this.health;
 	}
 	improve(a: Agent){
-		a.cycles--;
-		this.trapStack--;
+		a.food--;
+		this.health--;
 	}	
+}
+class Predator implements Resource {
+    public isHazard: boolean = true;
+    private health: number = Math.round(Math.random() * 2) + 1;
+    public name: string = "Predator";
+    harvest(a: Agent) {
+        if (this.health > 0 && Math.random() > .5) {
+            a.food--;
+        }
+    }
+    getImproveCost(): number {
+        return this.health;
+    }
+    improve(a: Agent) {
+        a.food--;
+        this.health--;
+    }
 }
 
 // idea: a resource that increases the mutation risk of an individual
 
+class Biome {
+    private Chances: ResourceChance[] = [];
+    constructor(mappings: Object) {
+        //todo: sort by chance first
+        for (var key in mappings) {
+            this.Chances.push(new ResourceChance(RuntimeFactory.create<BaseResource>(<string> key, null), <number> mappings[key]));
+        }
+    }
+    getResource(): Resource {
+        var rand = Math.floor(Math.random() * 100);
+        //console.log('Getting ' + rand + 'th percentile resource');
+        var chanceSum = 0;
+        for (var i = 0; i < this.Chances.length; i++) {
+            chanceSum += this.Chances[i].chance;
+            //console.log(this.Chances[i].resource.name+' is in the ' + chanceSum + 'th percentile');
+            if (rand <= chanceSum) {
+                return this.Chances[i].resource;
+            }
+        }
+        return this.Chances[this.Chances.length - 1].resource;
+    }
+    static Grassland: Biome = new Biome({
+        'AmbushPredator': 20,
+        'Memory': 40,
+        'Cycles': 40
+    });
+}
 
 class Log {
     public logDiv: HTMLDivElement;
