@@ -188,9 +188,5 @@ GeneratedArtifacts/
 _Pvt_Extensions/
 ModelManifest.xml
 
-# ecopico specific files
-ecopico.js
-statistics.js
-
 # ecopico documentation
 doc
