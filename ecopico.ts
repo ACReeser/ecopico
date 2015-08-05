@@ -9,8 +9,10 @@ interface Individual extends Named {
 	getFitness(): number;
 }
 
-interface Resource extends Named {
-	isHazard: boolean;
+interface Tile extends Named {
+    isHazard: boolean;
+    fight(a: Agent);
+    flight(a: Agent);
 	harvest(a: Agent);
 	improve(a: Agent);
 	getImproveCost(): number;
@@ -24,11 +26,13 @@ class RuntimeFactory {
 	}
 }
 
-class BaseResource implements Resource {
+class BaseResource implements Tile {
     public name: string = "BaseResource";
     public isHazard: boolean;
     public harvest(a: Agent) {    }
-    public improve(a: Agent) {    }
+    public improve(a: Agent) { }
+    public fight(a: Agent) { }
+    public flight(a: Agent) { }
     public getImproveCost(): number {
         return 0;
     }
@@ -39,7 +43,7 @@ class ResourceChance {
 }
 
 class World {
-    private map: Resource[] = [];
+    private map: Tile[] = [];
     private currentBiome: Biome;
 	private players: Agent[] = [];
 	private threadID: number;
@@ -58,7 +62,7 @@ class World {
 		this.populationLifetime = generationLifetime;
 		this.threadID = setInterval(this.tick.bind(this), 500);
 	}
-    closestResource(): Resource{
+    closestResource(): Tile{
         this.log.selectMapTile((this.generationLifetime - this.populationLifetime ) % (this.map.length / 2));
         return this.map[this.generationLifetime - this.populationLifetime];
 	}
@@ -332,7 +336,7 @@ class AgentMemoryBank {
             this.store[situation] = new AgentMemory(utilityChange, action);
     }
     remember(situation: string) {
-        if (this.store[situation] == null)
+        if (this.store[situation] == null || this.store[situation].utilityChange > 0)
             return '';
         else
             return this.store[situation].action;
@@ -406,23 +410,23 @@ class Agent implements Named, Individual{
             var r = world.closestResource(),
                 oldUtility = this.food,
                 isFarm = r instanceof Cycles,
-                isAmbushPredator = r instanceof AmbushPredator,
+                isPredator = r instanceof BasePredator,
                 isCache = r instanceof Memory,
                 action = "",
                 displayActionLink = "",
-                situation = isFarm+"|"+isAmbushPredator+"|"+isCache;
+                situation = isFarm+"|"+isPredator+"|"+isCache;
 			// log.out(this.displayName +" approaches a "+r.name);
 			
             action = this.memory.remember(situation);
             //todo: if action exists and utilityChange is > 0 (don't do things that hurt you)
             if (action == "") {
-                if (isAmbushPredator) {
+                if (isPredator) {
                     if (this.genotype.expressedPhenotype("aggression") && this.food > r.getImproveCost()) {
-                        action = "improve";
+                        action = "fight";
                         //todo: move these dal assignments to the resource
                         displayActionLink = " attacks the ";
                     } else {
-                        action = "harvest";
+                        action = "flight";
                         displayActionLink = " is hurt by the ";
                     }
                 } else if (isFarm) {
@@ -454,7 +458,7 @@ class Agent implements Named, Individual{
 	}
 }
 //todo - change hierarchy to tile > resource + hazard
-class Cycles implements Resource{
+class Cycles implements Tile{
 	public isHazard: boolean = false;
 	private cropYield: number = 1;
 	public name: string = "Farm"; //todo: farms are staying improved across generations???
@@ -469,7 +473,7 @@ class Cycles implements Resource{
 		this.cropYield++;
 	}
 }
-class Memory implements Resource{
+class Memory implements Tile{
 	public isHazard: boolean = false;
 	private cache: number = 1;
 	public name: string = "Cache";
@@ -487,37 +491,38 @@ class Memory implements Resource{
 }
 
 //todo - change to Hazard ancestor, with 'fight' and 'flight' options
-class AmbushPredator implements Resource{
-	public isHazard: boolean = true;
-	private health: number = Math.round(Math.random()*2)+1;
-    public name: string = "AmbushPredator";
-    //todo: have this modified by an alertness rating
-    harvest(a: Agent) {
+class BasePredator implements Tile{
+    public isHazard: boolean = true;
+	protected health: number = Math.round(Math.random()*2)+1;
+    public name: string = "BasePredator";
+    fight(a: Agent) {
+        a.food--;
+        this.health--;
+    }
+    flight(a: Agent) {
         if (this.health > 0 && Math.random() > .5) {
             a.food--;
         }
     }
+    //todo: have this modified by an alertness rating
+    harvest(a: Agent) {}
 	getImproveCost(): number{
 		return this.health;
 	}
 	improve(a: Agent){
-		a.food--;
-		this.health--;
 	}	
 }
-class Predator implements Resource {
-    public isHazard: boolean = true;
-    private health: number = Math.round(Math.random() * 2) + 1;
-    public name: string = "Predator";
-    harvest(a: Agent) {
+class Predator extends BasePredator {
+    constructor() {
+        super();
+        this.name = "Predator";
+    }
+    flight(a: Agent) {
         if (this.health > 0 && Math.random() > .5) {
             a.food--;
         }
     }
-    getImproveCost(): number {
-        return this.health;
-    }
-    improve(a: Agent) {
+    fight(a: Agent) {
         a.food--;
         this.health--;
     }
@@ -533,7 +538,7 @@ class Biome {
             this.Chances.push(new ResourceChance(RuntimeFactory.create<BaseResource>(<string> key, null), <number> mappings[key]));
         }
     }
-    getResource(): Resource {
+    getResource(): Tile {
         var rand = Math.floor(Math.random() * 100);
         //console.log('Getting ' + rand + 'th percentile resource');
         var chanceSum = 0;
@@ -547,7 +552,7 @@ class Biome {
         return this.Chances[this.Chances.length - 1].resource;
     }
     static Grassland: Biome = new Biome({
-        'AmbushPredator': 20,
+        'Predator': 20,
         'Memory': 40,
         'Cycles': 40
     });

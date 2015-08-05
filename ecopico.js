@@ -15,6 +15,30 @@ var RuntimeFactory = (function () {
     };
     return RuntimeFactory;
 })();
+var BaseResource = (function () {
+    function BaseResource() {
+        this.name = "BaseResource";
+    }
+    BaseResource.prototype.harvest = function (a) {
+    };
+    BaseResource.prototype.improve = function (a) {
+    };
+    BaseResource.prototype.fight = function (a) {
+    };
+    BaseResource.prototype.flight = function (a) {
+    };
+    BaseResource.prototype.getImproveCost = function () {
+        return 0;
+    };
+    return BaseResource;
+})();
+var ResourceChance = (function () {
+    function ResourceChance(resource, chance) {
+        this.resource = resource;
+        this.chance = chance;
+    }
+    return ResourceChance;
+})();
 var World = (function () {
     function World(log, runtime, initialPopulation, generationLifetime) {
         this.log = log;
@@ -40,14 +64,9 @@ var World = (function () {
     };
     World.prototype.generateMap = function () {
         this.map = [];
+        this.currentBiome = Biome.Grassland;
         for (var i = 0; i < this.generationLifetime / 2; i++) {
-            var rand = Math.random();
-            if (rand > .8)
-                this.map.push(new Trap());
-            else if (rand > .5)
-                this.map.push(new Memory());
-            else
-                this.map.push(new Cycles());
+            this.map.push(this.currentBiome.getResource());
         }
         this.renderMap();
         this.map = this.map.concat(this.map);
@@ -98,6 +117,7 @@ var World = (function () {
         this.log.out("Turn #" + (this.run), "h4");
         var statuses = [];
         this.log.out("Current tile: " + this.closestResource().name, "p");
+        //idea: sort player time by 'speed' rating
         this.players.forEach(function (p) {
             statuses.push(p.tick(_this, _this.log));
         });
@@ -187,6 +207,9 @@ var IntelligenceGene = (function (_super) {
     return IntelligenceGene;
 })(Gene);
 // idea: a 'curiousity' gene that controls whether or not an individual interacts with the mutator resource
+// idea: speed rating = sprint + (endurance*food)
+// idea: 'sprint' and 'endurance' phenotypes
+// idea: Memes - socially acquired traits
 // a chromosome is a collection of loci (a string:Gene map)
 var Chromosome = (function () {
     function Chromosome(rawChromatin) {
@@ -315,11 +338,35 @@ var Genotype = (function () {
     };
     return Genotype;
 })();
+var AgentMemoryBank = (function () {
+    function AgentMemoryBank() {
+        this.store = {};
+    }
+    AgentMemoryBank.prototype.addMemory = function (situation, action, utilityChange) {
+        if ((this.store[situation] == null) || (this.store[situation].utilityChange < utilityChange))
+            this.store[situation] = new AgentMemory(utilityChange, action);
+    };
+    AgentMemoryBank.prototype.remember = function (situation) {
+        if (this.store[situation] == null || this.store[situation].utilityChange > 0)
+            return '';
+        else
+            return this.store[situation].action;
+    };
+    return AgentMemoryBank;
+})();
+var AgentMemory = (function () {
+    function AgentMemory(utilityChange, action) {
+        this.utilityChange = utilityChange;
+        this.action = action;
+    }
+    return AgentMemory;
+})();
 var Agent = (function () {
     function Agent(dad, mom) {
         this.dad = dad;
         this.mom = mom;
-        this.cycles = 0;
+        this.food = 0;
+        this.memory = new AgentMemoryBank();
         if (dad && mom) {
             this.name = Agent.getRandomName() + " " + Agent.getFamilyName(mom, dad);
             this.genotype = new Genotype(.5, dad, mom);
@@ -357,76 +404,92 @@ var Agent = (function () {
         return dStr + mStr.toLowerCase();
     };
     Agent.prototype.getGenotype = function () {
+        this.memory['green'] = 'blue';
         return this.genotype;
     };
     Agent.prototype.getFitness = function () {
-        return this.cycles;
+        return this.food;
     };
     Agent.prototype.status = function () {
-        return ("| " + this.name + ": " + this.cycles + "¢ ");
+        return ("| " + this.name + ": " + this.food + "¢ ");
     };
     Agent.prototype.geneString = function () {
         return ("| " + this.genotype.status() + " |");
     };
+    //idea: memory - given inputs, remember most utility move
+    //idea: pass down the tick to the individual phenotype
+    //then you can completely abstract this
+    //you'd then have a ordering problem though, aka which phenotype kicks in first?
     Agent.prototype.tick = function (world, log) {
         if (this.genotype.expressedPhenotype("shy") && (Math.random() > .5)) {
-            log.out(this.displayName + " does not operate");
+            log.out(this.displayName + " does nothing");
         }
         else {
-            var r = world.closestResource();
+            var r = world.closestResource(), oldUtility = this.food, isFarm = r instanceof Cycles, isPredator = r instanceof BasePredator, isCache = r instanceof Memory, action = "", displayActionLink = "", situation = isFarm + "|" + isPredator + "|" + isCache;
             // log.out(this.displayName +" approaches a "+r.name);
-            if (r.isHazard) {
-                if (this.genotype.expressedPhenotype("aggression") && this.cycles > r.getImproveCost()) {
-                    r.improve(this);
-                    log.out(this.displayName + " attacks the " + r.name);
+            action = this.memory.remember(situation);
+            //todo: if action exists and utilityChange is > 0 (don't do things that hurt you)
+            if (action == "") {
+                if (isPredator) {
+                    if (this.genotype.expressedPhenotype("aggression") && this.food > r.getImproveCost()) {
+                        action = "fight";
+                        //todo: move these dal assignments to the resource
+                        displayActionLink = " attacks the ";
+                    }
+                    else {
+                        action = "flight";
+                        displayActionLink = " is hurt by the ";
+                    }
                 }
-                else {
-                    r.harvest(this);
-                    log.out(this.displayName + " is hurt by the " + r.name);
+                else if (isFarm) {
+                    if (this.genotype.expressedPhenotype("intelligence") && this.food > r.getImproveCost()) {
+                        action = "improve";
+                    }
+                    else {
+                        action = "harvest";
+                    }
                 }
-            }
-            else if (r instanceof Cycles) {
-                if (this.genotype.expressedPhenotype("intelligence") && this.cycles > r.getImproveCost()) {
-                    r.improve(this);
-                    log.out(this.displayName + " improves the " + r.name);
-                }
-                else {
-                    r.harvest(this);
-                    log.out(this.displayName + " harvests the " + r.name);
+                else if (isCache) {
+                    var harvestNotStore = Math.random() > .5;
+                    if (this.genotype.expressedPhenotype("intelligence") || harvestNotStore) {
+                        action = "harvest";
+                    }
+                    else {
+                        action = "improve";
+                    }
                 }
             }
             else {
-                var harvestNotStore = Math.random() > .5;
-                if (this.genotype.expressedPhenotype("intelligence") || harvestNotStore) {
-                    r.harvest(this);
-                    log.out(this.displayName + " harvests the " + r.name);
-                }
-                else {
-                    r.improve(this);
-                    log.out(this.displayName + " improves the " + r.name);
-                }
+                console.log(this.name + " remembers to " + action);
             }
+            //actually do the thing
+            r[action](this);
+            displayActionLink = (displayActionLink == "") ? " " + action + "s the " : displayActionLink;
+            log.out(this.displayName + displayActionLink + r.name);
+            //add a memory with the situation, action used, and change in utility
+            this.memory.addMemory(situation, action, this.food - oldUtility);
         }
         return this.status();
     };
     Agent.names = ["Lex", "Ram", "Car", "Dig", "Red", "Bin", "Ana", "Lib", "Sis", "Net", "Led", "Bus"];
     return Agent;
 })();
+//todo - change hierarchy to tile > resource + hazard
 var Cycles = (function () {
     function Cycles() {
         this.isHazard = false;
-        this.harvestRate = 1;
-        this.name = "CPU";
+        this.cropYield = 1;
+        this.name = "Farm"; //todo: farms are staying improved across generations???
     }
     Cycles.prototype.harvest = function (a) {
-        a.cycles += this.harvestRate;
+        a.food += this.cropYield;
     };
     Cycles.prototype.getImproveCost = function () {
-        return this.harvestRate + 1;
+        return this.cropYield + 1;
     };
     Cycles.prototype.improve = function (a) {
-        a.cycles -= this.getImproveCost();
-        this.harvestRate++;
+        a.food -= this.getImproveCost();
+        this.cropYield++;
     };
     return Cycles;
 })();
@@ -434,10 +497,10 @@ var Memory = (function () {
     function Memory() {
         this.isHazard = false;
         this.cache = 1;
-        this.name = "RAM";
+        this.name = "Cache";
     }
     Memory.prototype.harvest = function (a) {
-        a.cycles += this.cache;
+        a.food += this.cache;
         this.cache = 3;
     };
     Memory.prototype.getImproveCost = function () {
@@ -448,27 +511,77 @@ var Memory = (function () {
     };
     return Memory;
 })();
-var Trap = (function () {
-    function Trap() {
+//todo - change to Hazard ancestor, with 'fight' and 'flight' options
+var BasePredator = (function () {
+    function BasePredator() {
         this.isHazard = true;
-        this.trapStack = Math.round(Math.random() * 2) + 1;
-        this.name = "Trap";
+        this.health = Math.round(Math.random() * 2) + 1;
+        this.name = "BasePredator";
     }
-    Trap.prototype.harvest = function (a) {
-        if (this.trapStack > 0 && Math.random() > .5) {
-            a.cycles--;
+    BasePredator.prototype.fight = function (a) {
+        a.food--;
+        this.health--;
+    };
+    BasePredator.prototype.flight = function (a) {
+        if (this.health > 0 && Math.random() > .5) {
+            a.food--;
         }
     };
-    Trap.prototype.getImproveCost = function () {
-        return this.trapStack;
+    //todo: have this modified by an alertness rating
+    BasePredator.prototype.harvest = function (a) {
     };
-    Trap.prototype.improve = function (a) {
-        a.cycles--;
-        this.trapStack--;
+    BasePredator.prototype.getImproveCost = function () {
+        return this.health;
     };
-    return Trap;
+    BasePredator.prototype.improve = function (a) {
+    };
+    return BasePredator;
 })();
+var Predator = (function (_super) {
+    __extends(Predator, _super);
+    function Predator() {
+        _super.call(this);
+        this.name = "Predator";
+    }
+    Predator.prototype.flight = function (a) {
+        if (this.health > 0 && Math.random() > .5) {
+            a.food--;
+        }
+    };
+    Predator.prototype.fight = function (a) {
+        a.food--;
+        this.health--;
+    };
+    return Predator;
+})(BasePredator);
 // idea: a resource that increases the mutation risk of an individual
+var Biome = (function () {
+    function Biome(mappings) {
+        this.Chances = [];
+        for (var key in mappings) {
+            this.Chances.push(new ResourceChance(RuntimeFactory.create(key, null), mappings[key]));
+        }
+    }
+    Biome.prototype.getResource = function () {
+        var rand = Math.floor(Math.random() * 100);
+        //console.log('Getting ' + rand + 'th percentile resource');
+        var chanceSum = 0;
+        for (var i = 0; i < this.Chances.length; i++) {
+            chanceSum += this.Chances[i].chance;
+            //console.log(this.Chances[i].resource.name+' is in the ' + chanceSum + 'th percentile');
+            if (rand <= chanceSum) {
+                return this.Chances[i].resource;
+            }
+        }
+        return this.Chances[this.Chances.length - 1].resource;
+    };
+    Biome.Grassland = new Biome({
+        'Predator': 20,
+        'Memory': 40,
+        'Cycles': 40
+    });
+    return Biome;
+})();
 var Log = (function () {
     function Log(centerDiv) {
         this.centerDiv = centerDiv;
