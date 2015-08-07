@@ -26,24 +26,36 @@ class RuntimeFactory {
 	}
 }
 
-class BaseResource implements Tile {
-    public name: string = "BaseResource";
+class BaseTile implements Tile {
+    public name: string = "BaseTile";
     public isHazard: boolean;
-    public harvest(a: Agent) {    }
+    public harvest(a: Agent) { }
     public improve(a: Agent) { }
     public fight(a: Agent) { }
     public flight(a: Agent) { }
+    public getActionDescription(action: string) {
+        switch (action){
+            case "harvest":
+                return " harvests the ";
+            case "improve":
+                return " improves the ";
+            case "fight":
+                return " fights the ";
+            case "flight":
+                return " runs away from the ";
+        }
+    }
     public getImproveCost(): number {
         return 0;
     }
 }
 
 class ResourceChance {
-    constructor(public resource: BaseResource, public chance: number) {}
+    constructor(public resource: BaseTile, public chance: number) {}
 }
 
 class World {
-    private map: Tile[] = [];
+    private map: BaseTile[] = [];
     private currentBiome: Biome;
 	private players: Agent[] = [];
 	private threadID: number;
@@ -62,7 +74,7 @@ class World {
 		this.populationLifetime = generationLifetime;
 		this.threadID = setInterval(this.tick.bind(this), 500);
 	}
-    closestResource(): Tile{
+    closestResource(): BaseTile{
         this.log.selectMapTile((this.generationLifetime - this.populationLifetime ) % (this.map.length / 2));
         return this.map[this.generationLifetime - this.populationLifetime];
 	}
@@ -409,25 +421,19 @@ class Agent implements Named, Individual{
 		} else {
             var r = world.closestResource(),
                 oldUtility = this.food,
-                isFarm = r instanceof Cycles,
+                isFarm = r instanceof Farm,
                 isPredator = r instanceof BasePredator,
-                isCache = r instanceof Memory,
+                isCache = r instanceof Granary,
                 action = "",
-                displayActionLink = "",
                 situation = isFarm+"|"+isPredator+"|"+isCache;
-			// log.out(this.displayName +" approaches a "+r.name);
 			
             action = this.memory.remember(situation);
-            //todo: if action exists and utilityChange is > 0 (don't do things that hurt you)
             if (action == "") {
                 if (isPredator) {
                     if (this.genotype.expressedPhenotype("aggression") && this.food > r.getImproveCost()) {
                         action = "fight";
-                        //todo: move these dal assignments to the resource
-                        displayActionLink = " attacks the ";
                     } else {
                         action = "flight";
-                        displayActionLink = " is hurt by the ";
                     }
                 } else if (isFarm) {
                     if (this.genotype.expressedPhenotype("intelligence") && this.food > r.getImproveCost()) {
@@ -449,8 +455,7 @@ class Agent implements Named, Individual{
             //actually do the thing
             r[action](this);
 
-            displayActionLink = (displayActionLink == "") ? " " + action + "s the " : displayActionLink;
-            log.out(this.displayName + displayActionLink + r.name);		
+            log.out(this.displayName + r.getActionDescription(action) + r.name + "<span class='badge'>" + (this.food - oldUtility) + "</span>");		
             //add a memory with the situation, action used, and change in utility
             this.memory.addMemory(situation, action, this.food - oldUtility);
 		}
@@ -458,7 +463,7 @@ class Agent implements Named, Individual{
 	}
 }
 //todo - change hierarchy to tile > resource + hazard
-class Cycles implements Tile{
+class Farm extends BaseTile{
 	public isHazard: boolean = false;
 	private cropYield: number = 1;
 	public name: string = "Farm"; //todo: farms are staying improved across generations???
@@ -473,10 +478,10 @@ class Cycles implements Tile{
 		this.cropYield++;
 	}
 }
-class Memory implements Tile{
+class Granary extends BaseTile{
 	public isHazard: boolean = false;
 	private cache: number = 1;
-	public name: string = "Cache";
+	public name: string = "Granary";
     harvest(a: Agent) {
         a.food += this.cache;
 		this.cache = 3;
@@ -486,12 +491,10 @@ class Memory implements Tile{
 	}
 	improve(a: Agent){
 		this.cache++;
-
 	}
 }
 
-//todo - change to Hazard ancestor, with 'fight' and 'flight' options
-class BasePredator implements Tile{
+class BasePredator extends BaseTile{
     public isHazard: boolean = true;
 	protected health: number = Math.round(Math.random()*2)+1;
     public name: string = "BasePredator";
@@ -499,12 +502,12 @@ class BasePredator implements Tile{
         a.food--;
         this.health--;
     }
+    //todo: have this modified by an alertness or athletic rating
     flight(a: Agent) {
         if (this.health > 0 && Math.random() > .5) {
             a.food--;
         }
     }
-    //todo: have this modified by an alertness rating
     harvest(a: Agent) {}
 	getImproveCost(): number{
 		return this.health;
@@ -534,11 +537,13 @@ class Biome {
     private Chances: ResourceChance[] = [];
     constructor(mappings: Object) {
         //todo: sort by chance first
+        //fixme: it's only creating one instance per biome, which is wrong
+        //runtimefactory.create needs to be moved to getResource
         for (var key in mappings) {
-            this.Chances.push(new ResourceChance(RuntimeFactory.create<BaseResource>(<string> key, null), <number> mappings[key]));
+            this.Chances.push(new ResourceChance(RuntimeFactory.create<BaseTile>(<string> key, null), <number> mappings[key]));
         }
     }
-    getResource(): Tile {
+    getResource(): BaseTile {
         var rand = Math.floor(Math.random() * 100);
         //console.log('Getting ' + rand + 'th percentile resource');
         var chanceSum = 0;
@@ -553,8 +558,8 @@ class Biome {
     }
     static Grassland: Biome = new Biome({
         'Predator': 20,
-        'Memory': 40,
-        'Cycles': 40
+        'Granary': 40,
+        'Farm': 40
     });
 }
 

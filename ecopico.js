@@ -15,22 +15,34 @@ var RuntimeFactory = (function () {
     };
     return RuntimeFactory;
 })();
-var BaseResource = (function () {
-    function BaseResource() {
-        this.name = "BaseResource";
+var BaseTile = (function () {
+    function BaseTile() {
+        this.name = "BaseTile";
     }
-    BaseResource.prototype.harvest = function (a) {
+    BaseTile.prototype.harvest = function (a) {
     };
-    BaseResource.prototype.improve = function (a) {
+    BaseTile.prototype.improve = function (a) {
     };
-    BaseResource.prototype.fight = function (a) {
+    BaseTile.prototype.fight = function (a) {
     };
-    BaseResource.prototype.flight = function (a) {
+    BaseTile.prototype.flight = function (a) {
     };
-    BaseResource.prototype.getImproveCost = function () {
+    BaseTile.prototype.getActionDescription = function (action) {
+        switch (action) {
+            case "harvest":
+                return " harvests the ";
+            case "improve":
+                return " improves the ";
+            case "fight":
+                return " fights the ";
+            case "flight":
+                return " runs away from the ";
+        }
+    };
+    BaseTile.prototype.getImproveCost = function () {
         return 0;
     };
-    return BaseResource;
+    return BaseTile;
 })();
 var ResourceChance = (function () {
     function ResourceChance(resource, chance) {
@@ -425,20 +437,15 @@ var Agent = (function () {
             log.out(this.displayName + " does nothing");
         }
         else {
-            var r = world.closestResource(), oldUtility = this.food, isFarm = r instanceof Cycles, isPredator = r instanceof BasePredator, isCache = r instanceof Memory, action = "", displayActionLink = "", situation = isFarm + "|" + isPredator + "|" + isCache;
-            // log.out(this.displayName +" approaches a "+r.name);
+            var r = world.closestResource(), oldUtility = this.food, isFarm = r instanceof Farm, isPredator = r instanceof BasePredator, isCache = r instanceof Granary, action = "", situation = isFarm + "|" + isPredator + "|" + isCache;
             action = this.memory.remember(situation);
-            //todo: if action exists and utilityChange is > 0 (don't do things that hurt you)
             if (action == "") {
                 if (isPredator) {
                     if (this.genotype.expressedPhenotype("aggression") && this.food > r.getImproveCost()) {
                         action = "fight";
-                        //todo: move these dal assignments to the resource
-                        displayActionLink = " attacks the ";
                     }
                     else {
                         action = "flight";
-                        displayActionLink = " is hurt by the ";
                     }
                 }
                 else if (isFarm) {
@@ -464,8 +471,7 @@ var Agent = (function () {
             }
             //actually do the thing
             r[action](this);
-            displayActionLink = (displayActionLink == "") ? " " + action + "s the " : displayActionLink;
-            log.out(this.displayName + displayActionLink + r.name);
+            log.out(this.displayName + r.getActionDescription(action) + r.name + "<span class='badge'>" + (this.food - oldUtility) + "</span>");
             //add a memory with the situation, action used, and change in utility
             this.memory.addMemory(situation, action, this.food - oldUtility);
         }
@@ -475,45 +481,50 @@ var Agent = (function () {
     return Agent;
 })();
 //todo - change hierarchy to tile > resource + hazard
-var Cycles = (function () {
-    function Cycles() {
+var Farm = (function (_super) {
+    __extends(Farm, _super);
+    function Farm() {
+        _super.apply(this, arguments);
         this.isHazard = false;
         this.cropYield = 1;
         this.name = "Farm"; //todo: farms are staying improved across generations???
     }
-    Cycles.prototype.harvest = function (a) {
+    Farm.prototype.harvest = function (a) {
         a.food += this.cropYield;
     };
-    Cycles.prototype.getImproveCost = function () {
+    Farm.prototype.getImproveCost = function () {
         return this.cropYield + 1;
     };
-    Cycles.prototype.improve = function (a) {
+    Farm.prototype.improve = function (a) {
         a.food -= this.getImproveCost();
         this.cropYield++;
     };
-    return Cycles;
-})();
-var Memory = (function () {
-    function Memory() {
+    return Farm;
+})(BaseTile);
+var Granary = (function (_super) {
+    __extends(Granary, _super);
+    function Granary() {
+        _super.apply(this, arguments);
         this.isHazard = false;
         this.cache = 1;
-        this.name = "Cache";
+        this.name = "Granary";
     }
-    Memory.prototype.harvest = function (a) {
+    Granary.prototype.harvest = function (a) {
         a.food += this.cache;
         this.cache = 3;
     };
-    Memory.prototype.getImproveCost = function () {
+    Granary.prototype.getImproveCost = function () {
         return 999;
     };
-    Memory.prototype.improve = function (a) {
+    Granary.prototype.improve = function (a) {
         this.cache++;
     };
-    return Memory;
-})();
-//todo - change to Hazard ancestor, with 'fight' and 'flight' options
-var BasePredator = (function () {
+    return Granary;
+})(BaseTile);
+var BasePredator = (function (_super) {
+    __extends(BasePredator, _super);
     function BasePredator() {
+        _super.apply(this, arguments);
         this.isHazard = true;
         this.health = Math.round(Math.random() * 2) + 1;
         this.name = "BasePredator";
@@ -522,12 +533,12 @@ var BasePredator = (function () {
         a.food--;
         this.health--;
     };
+    //todo: have this modified by an alertness or athletic rating
     BasePredator.prototype.flight = function (a) {
         if (this.health > 0 && Math.random() > .5) {
             a.food--;
         }
     };
-    //todo: have this modified by an alertness rating
     BasePredator.prototype.harvest = function (a) {
     };
     BasePredator.prototype.getImproveCost = function () {
@@ -536,7 +547,7 @@ var BasePredator = (function () {
     BasePredator.prototype.improve = function (a) {
     };
     return BasePredator;
-})();
+})(BaseTile);
 var Predator = (function (_super) {
     __extends(Predator, _super);
     function Predator() {
@@ -577,8 +588,8 @@ var Biome = (function () {
     };
     Biome.Grassland = new Biome({
         'Predator': 20,
-        'Memory': 40,
-        'Cycles': 40
+        'Granary': 40,
+        'Farm': 40
     });
     return Biome;
 })();
